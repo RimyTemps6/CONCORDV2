@@ -3,16 +3,12 @@ service cloud.firestore {
   match /databases/{database}/documents {
     function signedIn() { return request.auth != null; }
 
-    // Guarda o token de cadastro (config/signup -> campo "code"). Ninguém lê pelo app.
-    match /config/{doc} { allow read, write: if false; }
-
     match /users/{uid} {
       allow read: if signedIn();
       // O campo "admin" só pode ser definido pelo console do Firebase, nunca pelo site.
       allow create: if signedIn() && request.auth.uid == uid
         && !('admin' in request.resource.data)
-        && request.resource.data.get('photo', '').size() < 60000
-        && request.resource.data.token == get(/databases/$(database)/documents/config/signup).data.code;
+        && request.resource.data.get('photo', '').size() < 60000;
       allow update: if signedIn() && request.auth.uid == uid
         && request.resource.data.publicId == resource.data.publicId
         && request.resource.data.get('admin', false) == resource.data.get('admin', false)

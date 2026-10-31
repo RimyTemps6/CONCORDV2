@@ -1,5 +1,5 @@
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import {getAuth,GoogleAuthProvider,signInWithPopup,createUserWithEmailAndPassword,signInWithEmailAndPassword,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {getFirestore,doc,getDoc,setDoc,addDoc,updateDoc,deleteDoc,arrayUnion,collection,query,where,orderBy,onSnapshot,getDocs,writeBatch,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {firebaseConfig} from "./firebase-config.js";
 
@@ -8,11 +8,10 @@ const $ = s => document.querySelector(s), $$ = s => [...document.querySelectorAl
 const esc = t => String(t ?? "").replace(/[&<>"]/g, c => ({"&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;"}[c]));
 const hue = n => [...String(n)].reduce((a, c) => a + c.charCodeAt(0) * 13, 0) % 360;
 const hm = ts => ts ? ts.toDate().toLocaleTimeString("pt-BR", {hour: "2-digit", minute: "2-digit"}) : "";
-const MAIL = "@conecta.app";   // mantido para as contas já criadas continuarem funcionando
 const CH = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
 const newId = () => Array.from({length: 8}, () => CH[Math.floor(Math.random() * CH.length)]).join("");
 const COLORS = ["#5ba8ff", "#7cc0ff", "#a78bfa", "#f78fb3", "#ffb86b", "#5fd3b6", "#4a6fa5", "#2f4f93"];
-let me = null, cur = null, unsubs = [], unsubMsgs = null, busy = false, scanner = null;
+let me = null, cur = null, unsubs = [], unsubMsgs = null, scanner = null;
 const S = {tab: "chats", chats: [], st: [], q: ""};
 const err = t => $("#err").textContent = t || "";
 
@@ -64,40 +63,7 @@ function theme() {
 $("#bTheme0").onclick = theme;
 
 /* ---------- Login e cadastro ---------- */
-function tab(entrar) {
-  $("#fIn").hidden = !entrar; $("#fUp").hidden = entrar;
-  $("#tabIn").classList.toggle("on", entrar); $("#tabUp").classList.toggle("on", !entrar); err();
-}
-$("#tabIn").onclick = () => tab(true);
-$("#tabUp").onclick = () => tab(false);
-$("#fUp").onsubmit = async e => {
-  e.preventDefault(); err(); busy = true;
-  const name = $("#upName").value.trim(), token = $("#upToken").value.trim(), pw = $("#upPw").value;
-  try {
-    let cred, id;
-    for (let i = 0; i < 5 && !cred; i++) {
-      id = newId();
-      try { cred = await createUserWithEmailAndPassword(auth, id.toLowerCase() + MAIL, pw); }
-      catch (x) { if (x.code !== "auth/email-already-in-use") throw x; }
-    }
-    try { await setDoc(doc(db, "users", cred.user.uid), {name, publicId: id, token, createdAt: serverTimestamp()}); }
-    catch (x) { await cred.user.delete(); throw {code: x.code === "permission-denied" ? "token" : (x.code || x.message)}; }
-    await enter(cred.user);
-  } catch (x) {
-    err(x.code === "token" ? "Token inválido, ou as regras do Firestore ainda não foram publicadas."
-      : x.code === "auth/weak-password" ? "A senha precisa ter 6 ou mais caracteres."
-      : x.code === "auth/operation-not-allowed" ? "Ative o login por E-mail/senha no Firebase (Authentication)."
-      : x.code === "auth/unauthorized-domain" ? "Adicione este domínio em Authentication > Configurações > Domínios autorizados."
-      : "Erro: " + (x.code || x.message));
-  }
-  busy = false;
-};
-$("#fIn").onsubmit = async e => {
-  e.preventDefault(); err();
-  try { await signInWithEmailAndPassword(auth, $("#inId").value.trim().toLowerCase() + MAIL, $("#inPw").value); }
-  catch { err("ID ou senha incorretos."); }
-};
-onAuthStateChanged(auth, u => { if (busy) return; u ? enter(u) : leave(); });
+onAuthStateChanged(auth, u => { u ? enter(u) : leave(); });
 
 async function enter(u) {
   if (me?.uid === u.uid) return;
@@ -464,20 +430,19 @@ $("#stCancel").onclick = () => signOut(auth);
 $("#fSetup").onsubmit = async e => {
   e.preventDefault();
   const u = setupUser, er = t => $("#stErr").textContent = t;
-  const name = $("#stName").value.trim(), token = $("#stToken").value.trim();
+  const name = $("#stName").value.trim();
   if (!name) return er("Digite seu nome.");
   try {
-    // contas antigas de ID e senha mantêm o mesmo ID; contas Google ganham um ID novo e único
-    let id = u.email?.endsWith(MAIL) ? u.email.split("@")[0].toUpperCase() : null;
+    let id = null;
     for (let i = 0; !id && i < 6; i++) {
       const t = newId();
       if ((await getDocs(query(collection(db, "users"), where("publicId", "==", t)))).empty) id = t;
     }
-    const data = {name, publicId: id, token, createdAt: serverTimestamp()};
+    const data = {name, publicId: id, createdAt: serverTimestamp()};
     if (u.photoURL) data.photo = u.photoURL;
     await setDoc(doc(db, "users", u.uid), data);
   } catch (x) {
-    return er(x.code === "permission-denied" ? "Token inválido, ou as regras do Firestore ainda não foram publicadas." : "Erro: " + (x.code || x.message));
+    return er(x.code === "permission-denied" ? "Sem permissão. Publique as novas regras do Firestore." : "Erro: " + (x.code || x.message));
   }
   await enter(u);
 };

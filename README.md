@@ -2,7 +2,7 @@
 
 Chat em tempo real feito com HTML, CSS e JavaScript, usando Firebase (login + Firestore).
 
-- Cadastro com nome, token e senha. O ID da conta é gerado automaticamente.
+- Login somente com conta Google. No primeiro acesso a pessoa escolhe o nome, e o ID da conta é gerado automaticamente.
 - Pessoas são adicionadas por QR code ou pelo ID da conta.
 - Mensagens chegam na hora entre aparelhos.
 
