@@ -1,5 +1,5 @@
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import {getAuth,GoogleAuthProvider,signInWithPopup,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithCredential,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {getFirestore,doc,getDoc,setDoc,addDoc,updateDoc,deleteDoc,arrayUnion,collection,query,where,orderBy,onSnapshot,getDocs,writeBatch,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {firebaseConfig} from "./firebase-config.js";
 
@@ -14,6 +14,20 @@ const COLORS = ["#5ba8ff", "#7cc0ff", "#a78bfa", "#f78fb3", "#ffb86b", "#5fd3b6"
 let me = null, cur = null, unsubs = [], unsubMsgs = null, scanner = null;
 const S = {tab: "chats", chats: [], st: [], q: ""};
 const err = t => $("#err").textContent = t || "";
+
+/* ---------- App Android (o site roda dentro do app; "AndroidApp" é a ponte) ---------- */
+const NATIVE = window.AndroidApp || null;
+window.onGoogleToken = async t => {
+  try { await signInWithCredential(auth, GoogleAuthProvider.credential(t)); }
+  catch (x) { err("Erro: " + (x.code || x.message)); }
+};
+window.onGoogleError = m => err(/cancel/i.test(m) ? "" : "Não foi possível entrar com Google: " + m);
+window.onFcmToken = t => { if (me && t) setDoc(doc(db, "fcmTokens", me.uid), {token: t, at: serverTimestamp()}).catch(() => {}); };
+window.refreshFcm = () => { if (NATIVE && me) NATIVE.requestToken(); };
+async function logout() {
+  try { if (NATIVE && me) await deleteDoc(doc(db, "fcmTokens", me.uid)); } catch {}
+  signOut(auth);
+}
 
 /* ---------- Ícones (SVG, sem emojis) ---------- */
 const IC = {
@@ -81,6 +95,7 @@ async function enter(u) {
       s => s.docChanges().forEach(c => c.type === "added" && incoming({id: c.doc.id, ...c.doc.data()})))
   ];
   renderList();
+  if (NATIVE) NATIVE.requestToken();
 }
 function leave() {
   hang(); unsubs.forEach(f => f()); unsubs = []; unsubMsgs && unsubMsgs();
@@ -286,7 +301,7 @@ async function pgMe(pg) {
     <div class="who2">${av(me.name, me.uid)}<h2>${esc(me.name)}${me.admin ? ' <span class="tag">admin</span>' : ""}</h2><p class="mut">${esc(me.bio || "Olá! Estou usando o Concord.")}</p><small>ID: ${me.publicId}</small></div>
     <div class="grid3"><button data-a="edit">${ic("user")}<span>Editar perfil</span></button><button data-a="qr">${ic("qr")}<span>Meu QR</span></button><button data-a="theme">${ic(isDark() ? "sun" : "moon")}<span>Tema</span></button></div>
     <div class="card"><button class="row3" data-a="addp">${ic("plus")}<span>Adicionar pessoa</span></button><button class="row3" data-a="newg">${ic("users")}<span>Novo grupo</span></button><button class="row3" data-a="out">${ic("out")}<span>Sair</span></button></div>`;
-  const A = {edit: () => openProfile(me.uid), qr: showQr, theme: () => { theme(); renderList(); }, addp: addPersonModal, newg: newGroup, out: () => signOut(auth)};
+  const A = {edit: () => openProfile(me.uid), qr: showQr, theme: () => { theme(); renderList(); }, addp: addPersonModal, newg: newGroup, out: logout};
   pg.querySelectorAll("[data-a]").forEach(b => b.onclick = A[b.dataset.a]);
 }
 async function openProfile(u) {
@@ -412,6 +427,7 @@ async function answer(d) {
 /* ---------- Entrar com Google e primeiro acesso ---------- */
 $("#bGoogle").onclick = async () => {
   err();
+  if (NATIVE) return NATIVE.googleSignIn();   // no app, o login com Google é nativo
   try { await signInWithPopup(auth, new GoogleAuthProvider()); }
   catch (x) {
     err(x.code === "auth/popup-blocked" ? "O navegador bloqueou a janela do Google. Libere pop-ups para este site."
