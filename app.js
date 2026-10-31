@@ -1,5 +1,5 @@
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
-import {getAuth,createUserWithEmailAndPassword,signInWithEmailAndPassword,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
+import {getAuth,GoogleAuthProvider,signInWithPopup,createUserWithEmailAndPassword,signInWithEmailAndPassword,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
 import {getFirestore,doc,getDoc,setDoc,addDoc,updateDoc,deleteDoc,arrayUnion,collection,query,where,orderBy,onSnapshot,getDocs,writeBatch,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {firebaseConfig} from "./firebase-config.js";
 
@@ -44,7 +44,7 @@ $$("[data-i]").forEach(e => e.innerHTML = ic(e.dataset.i));
 const P = {};
 const av = (n, u, sq) => {
   const p = u && P[u]?.photo, c = sq ? " sq" : "";
-  return p ? `<div class="av${c}"><img src="${p}" alt=""></div>`
+  return p ? `<div class="av${c}"><img src="${p}" alt="" referrerpolicy="no-referrer"></div>`
     : `<div class="av${c}" style="background:linear-gradient(135deg,hsl(${hue(n)},75%,72%),hsl(${(hue(n) + 40) % 360},70%,60%))">${esc(String(n || "?").trim().slice(0, 2).toUpperCase() || "?")}</div>`;
 };
 async function ensureP(uids) {
@@ -100,10 +100,11 @@ $("#fIn").onsubmit = async e => {
 onAuthStateChanged(auth, u => { if (busy) return; u ? enter(u) : leave(); });
 
 async function enter(u) {
+  if (me?.uid === u.uid) return;
   const s = await getDoc(doc(db, "users", u.uid));
-  if (!s.exists()) { await signOut(auth); return err("Conta sem perfil."); }
+  if (!s.exists()) return showSetup(u);          // primeiro acesso: completar cadastro
   me = {uid: u.uid, ...s.data()}; P[me.uid] = me;
-  $("#auth").hidden = true; $("#app").hidden = false;
+  $("#auth").hidden = $("#setup").hidden = true; $("#app").hidden = false;
   unsubs = [
     onSnapshot(query(collection(db, "chats"), where("members", "array-contains", me.uid)), s => { S.chats = s.docs.map(d => ({id: d.id, ...d.data()})); renderList(); }),
     onSnapshot(query(collection(db, "statuses"), where("viewers", "array-contains", me.uid)), s => {
@@ -117,7 +118,7 @@ async function enter(u) {
 }
 function leave() {
   hang(); unsubs.forEach(f => f()); unsubs = []; unsubMsgs && unsubMsgs();
-  me = cur = null; S.chats = []; S.st = []; $("#app").hidden = true; $("#auth").hidden = false;
+  me = cur = null; S.chats = []; S.st = []; $("#app").hidden = $("#setup").hidden = true; $("#auth").hidden = false;
 }
 
 /* ---------- Navegação e lista ---------- */
@@ -441,3 +442,42 @@ async function answer(d) {
   callUnsubs.push(onAdded(callRef, "callerCandidates"));
   callUnsubs.push(onSnapshot(callRef, s => { if (s.data()?.status === "ended") hang("ended"); }));
 }
+
+/* ---------- Entrar com Google e primeiro acesso ---------- */
+$("#bGoogle").onclick = async () => {
+  err();
+  try { await signInWithPopup(auth, new GoogleAuthProvider()); }
+  catch (x) {
+    err(x.code === "auth/popup-blocked" ? "O navegador bloqueou a janela do Google. Libere pop-ups para este site."
+      : x.code === "auth/unauthorized-domain" ? "Adicione este domínio em Authentication > Configurações > Domínios autorizados."
+      : x.code === "auth/operation-not-allowed" ? "Ative o provedor Google em Authentication > Método de login."
+      : ["auth/popup-closed-by-user", "auth/cancelled-popup-request"].includes(x.code) ? ""
+      : "Erro: " + (x.code || x.message));
+  }
+};
+let setupUser = null;
+function showSetup(u) {
+  setupUser = u; $("#auth").hidden = true; $("#app").hidden = true; $("#setup").hidden = false;
+  $("#stName").value = u.displayName || ""; $("#stErr").textContent = "";
+}
+$("#stCancel").onclick = () => signOut(auth);
+$("#fSetup").onsubmit = async e => {
+  e.preventDefault();
+  const u = setupUser, er = t => $("#stErr").textContent = t;
+  const name = $("#stName").value.trim(), token = $("#stToken").value.trim();
+  if (!name) return er("Digite seu nome.");
+  try {
+    // contas antigas de ID e senha mantêm o mesmo ID; contas Google ganham um ID novo e único
+    let id = u.email?.endsWith(MAIL) ? u.email.split("@")[0].toUpperCase() : null;
+    for (let i = 0; !id && i < 6; i++) {
+      const t = newId();
+      if ((await getDocs(query(collection(db, "users"), where("publicId", "==", t)))).empty) id = t;
+    }
+    const data = {name, publicId: id, token, createdAt: serverTimestamp()};
+    if (u.photoURL) data.photo = u.photoURL;
+    await setDoc(doc(db, "users", u.uid), data);
+  } catch (x) {
+    return er(x.code === "permission-denied" ? "Token inválido, ou as regras do Firestore ainda não foram publicadas." : "Erro: " + (x.code || x.message));
+  }
+  await enter(u);
+};
