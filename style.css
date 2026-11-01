@@ -123,3 +123,15 @@ small,time{font-size:12px}
 .gbtn svg{width:20px;height:20px}
 .or{display:flex;align-items:center;gap:10px;color:var(--mut);font-size:12px}
 .or:before,.or:after{content:"";flex:1;height:1px;background:var(--bd)}
+
+/* Listas de pessoas (grupos) */
+.pl{width:100%;max-height:38vh;overflow:auto;display:grid;gap:2px;text-align:left;border-radius:16px;background:var(--pan);border:1px solid var(--bd);padding:4px}
+.pl label,.pl .pr{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:12px;cursor:pointer}
+.pl .pr{cursor:default}
+.pl label:hover{background:var(--pan2)}
+.pl .av{width:36px;height:36px;font-size:13px}
+.pl .nm{flex:1;min-width:0;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.pl input{width:20px;height:20px;padding:0;flex:none;accent-color:var(--acc)}
+.fbtn.dng{color:#e5484d}
+.btn.dng{background:#e5484d}
+.box p{margin:0}

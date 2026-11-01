@@ -1,6 +1,6 @@
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithCredential,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import {getFirestore,doc,getDoc,setDoc,addDoc,updateDoc,deleteDoc,arrayUnion,collection,query,where,orderBy,onSnapshot,getDocs,writeBatch,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import {getFirestore,doc,getDoc,setDoc,addDoc,updateDoc,deleteDoc,arrayUnion,arrayRemove,collection,query,where,orderBy,onSnapshot,getDocs,writeBatch,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {firebaseConfig} from "./firebase-config.js";
 
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
@@ -24,6 +24,17 @@ window.onGoogleToken = async t => {
 window.onGoogleError = m => err(/cancel/i.test(m) ? "" : "Não foi possível entrar com Google: " + m);
 window.onFcmToken = t => { if (me && t) setDoc(doc(db, "fcmTokens", me.uid), {token: t, at: serverTimestamp()}).catch(() => {}); };
 window.refreshFcm = () => { if (NATIVE && me) NATIVE.requestToken(); };
+// Vindos das notificações do app: atender uma ligação / abrir uma conversa
+let answering = null;
+window.answerCall = () => {
+  const id = window.pendingAnswer; if (!id || !me) return;
+  window.pendingAnswer = null; answerById(id);
+};
+window.openPendingChat = () => {
+  const id = window.pendingChat; if (!id || !me) return;
+  const c = S.chats.find(x => x.id === id); if (!c) return;
+  window.pendingChat = null; S.tab = "chats"; openChat(c);
+};
 async function logout() {
   try { if (NATIVE && me) await deleteDoc(doc(db, "fcmTokens", me.uid)); } catch {}
   signOut(auth);
@@ -86,7 +97,16 @@ async function enter(u) {
   me = {uid: u.uid, ...s.data()}; P[me.uid] = me;
   $("#auth").hidden = $("#setup").hidden = true; $("#app").hidden = false;
   unsubs = [
-    onSnapshot(query(collection(db, "chats"), where("members", "array-contains", me.uid)), s => { S.chats = s.docs.map(d => ({id: d.id, ...d.data()})); renderList(); }),
+    onSnapshot(query(collection(db, "chats"), where("members", "array-contains", me.uid)), s => {
+      const had = cur && S.chats.some(x => x.id === cur.id);
+      S.chats = s.docs.map(d => ({id: d.id, ...d.data()}));
+      if (cur) {
+        const f = S.chats.find(x => x.id === cur.id);
+        if (f) { const mudou = f.members.length !== cur.members.length || f.name !== cur.name || f.owner !== cur.owner; cur = f; if (mudou) head(); }
+        else if (had) closeChat();
+      }
+      renderList(); window.openPendingChat();
+    }),
     onSnapshot(query(collection(db, "statuses"), where("viewers", "array-contains", me.uid)), s => {
       const lim = Date.now() - 864e5;
       S.st = s.docs.map(d => ({id: d.id, ...d.data()})).filter(x => !x.at || x.at.toMillis() > lim); renderList();
@@ -96,6 +116,7 @@ async function enter(u) {
   ];
   renderList();
   if (NATIVE) NATIVE.requestToken();
+  window.answerCall(); window.openPendingChat();
 }
 function leave() {
   hang(); unsubs.forEach(f => f()); unsubs = []; unsubMsgs && unsubMsgs();
@@ -140,13 +161,25 @@ function chooser() {
 }
 
 /* ---------- Chat em tempo real ---------- */
+function head() {
+  const c = cur, g = c.type === "group";
+  const sub = g ? c.members.map(m => c.names?.[m]).filter(Boolean).join(", ") : "Toque para ver o perfil";
+  $("#chHead").innerHTML = av(title(c), other(c)) + `<div class="grow"><b>${esc(title(c))}</b><small>${esc(sub)}</small></div>`;
+  $("#chHead").onclick = () => g ? groupInfo() : openProfile(other(c));
+  $("#bCall").hidden = $("#bVid").hidden = g; $("#bMem").hidden = !(g && c.owner === me.uid);
+}
+function closeChat() {
+  unsubMsgs && unsubMsgs(); unsubMsgs = null; cur = null;
+  $("#app").classList.remove("inchat");
+  $("#chHead").innerHTML = "<b>Concord</b>"; $("#chHead").onclick = null;
+  $("#bCall").hidden = $("#bVid").hidden = $("#bMem").hidden = true;
+  $("#msgs").innerHTML = '<p class="empty">Escolha uma conversa para começar.</p>';
+  renderList();
+}
 function openChat(c) {
   cur = c; unsubMsgs && unsubMsgs();
   const g = c.type === "group";
-  ensureP([other(c)]);
-  $("#chHead").innerHTML = av(title(c), other(c)) + `<div class="grow"><b>${esc(title(c))}</b><small>${g ? esc(Object.values(c.names).join(", ")) : "Toque para ver o perfil"}</small></div>`;
-  $("#chHead").onclick = () => g || openProfile(other(c));
-  $("#bCall").hidden = $("#bVid").hidden = g; $("#bMem").hidden = !(g && c.owner === me.uid);
+  ensureP([other(c)]); head();
   $("#app").classList.add("inchat"); renderList();
   unsubMsgs = onSnapshot(query(collection(db, "chats", c.id, "messages"), orderBy("at")), s => {
     const box = $("#msgs"); box.innerHTML = "";
@@ -219,26 +252,80 @@ async function addPerson(raw) {
 }
 
 /* ---------- Grupos ---------- */
-function newGroup() {
-  modal('<h3>Novo grupo</h3><input id="gn" maxlength="30" placeholder="Nome do grupo"><textarea id="gm" placeholder="IDs das pessoas, separados por vírgula (opcional)"></textarea><button class="btn" id="go">Criar grupo</button><p id="addErr"></p>');
+const contacts = () => S.chats.filter(c => c.type !== "group").map(c => ({uid: other(c), name: c.names?.[other(c)] || "?"})).filter(x => x.uid);
+const pickList = (list, vazio) => list.length
+  ? '<div class="pl">' + list.map(x => `<label>${av(x.name, x.uid)}<span class="nm">${esc(x.name)}</span><input type="checkbox" value="${x.uid}"></label>`).join("") + "</div>"
+  : `<p class="mut">${vazio}</p>`;
+const picked = () => $$(".pl input:checked").map(i => i.value);
+
+async function newGroup() {
+  const list = contacts(); await ensureP(list.map(x => x.uid));
+  modal('<h3>Novo grupo</h3><input id="gn" maxlength="30" placeholder="Nome do grupo"><small>Escolha quem entra no grupo</small>'
+    + pickList(list, "Você ainda não tem contatos. Adicione pessoas pelo QR ou ID e depois volte aqui.")
+    + '<button class="btn" id="go">Criar grupo</button><p id="addErr"></p>');
   $("#go").onclick = async () => {
     const name = $("#gn").value.trim(); if (!name) return $("#addErr").textContent = "Dê um nome ao grupo.";
-    const found = await findUsers($("#gm").value.split(/[,\s]+/));
-    const members = [me.uid, ...found.map(d => d.id).filter(i => i !== me.uid)], names = {[me.uid]: me.name};
-    found.forEach(d => names[d.id] = d.data().name);
+    const ids = picked().slice(0, 49), members = [me.uid, ...ids], names = {[me.uid]: me.name};
+    list.forEach(x => { if (ids.includes(x.uid)) names[x.uid] = x.name; });
     const ref = doc(collection(db, "chats")), data = {type: "group", name, owner: me.uid, members, names, last: "", updatedAt: serverTimestamp()};
-    await setDoc(ref, data); await closeModal(); S.tab = "chats"; openChat({id: ref.id, ...data});
+    try { await setDoc(ref, data); } catch { return $("#addErr").textContent = "Não foi possível criar o grupo."; }
+    await closeModal(); S.tab = "chats"; openChat({id: ref.id, ...data});
   };
 }
-$("#bMem").onclick = () => {
-  modal('<h3>Adicionar ao grupo</h3><input id="addId" placeholder="ID da pessoa" maxlength="8"><button class="btn" id="go">Adicionar</button><p id="addErr"></p>');
+async function addMembers() {
+  const c = cur; if (!c || c.owner !== me.uid) return;
+  const list = contacts().filter(x => !c.members.includes(x.uid)); await ensureP(list.map(x => x.uid));
+  modal('<h3>Adicionar ao grupo</h3>' + pickList(list, "Todos os seus contatos já estão no grupo.")
+    + (list.length ? '<button class="btn" id="go">Adicionar</button>' : "") + '<p id="addErr"></p>');
+  if (!list.length) return;
   $("#go").onclick = async () => {
-    const [o] = await findUsers([$("#addId").value]); if (!o) return $("#addErr").textContent = "ID não encontrado.";
-    if (cur.members.includes(o.id)) return $("#addErr").textContent = "Essa pessoa já está no grupo.";
-    await updateDoc(doc(db, "chats", cur.id), {members: arrayUnion(o.id), ["names." + o.id]: o.data().name});
-    cur.members.push(o.id); cur.names[o.id] = o.data().name; await closeModal(); openChat(cur);
+    const ids = picked(); if (!ids.length) return $("#addErr").textContent = "Escolha pelo menos uma pessoa.";
+    if (c.members.length + ids.length > 50) return $("#addErr").textContent = "O grupo aceita até 50 pessoas.";
+    const upd = {members: arrayUnion(...ids)}; list.forEach(x => { if (ids.includes(x.uid)) upd["names." + x.uid] = x.name; });
+    try { await updateDoc(doc(db, "chats", c.id), upd); } catch { return $("#addErr").textContent = "Não foi possível adicionar. Publique as novas regras no Firebase."; }
+    await closeModal();
   };
-};
+}
+$("#bMem").onclick = addMembers;
+
+function sure(text, yes, fn) {
+  modal(`<h3>Tem certeza?</h3><p>${esc(text)}</p><div class="row2"><button class="btn" id="sno">Cancelar</button><button class="btn dng" id="syes">${esc(yes)}</button></div><p id="addErr"></p>`);
+  $("#sno").onclick = closeModal;
+  $("#syes").onclick = async () => {
+    $("#syes").disabled = true;
+    try { await fn(); await closeModal(); }
+    catch { $("#addErr").textContent = "Não foi possível. Publique as novas regras no Firebase."; $("#syes").disabled = false; }
+  };
+}
+function groupInfo() {
+  const c = cur; if (!c || c.type !== "group") return;
+  const own = c.owner === me.uid; ensureP(c.members);
+  const rows = c.members.map(m => `<div class="pr">${av(c.names?.[m], m)}<span class="nm">${esc(c.names?.[m] || "?")}${m === me.uid ? " (você)" : ""}</span>${m === c.owner ? '<span class="tag">dono</span>' : ""}</div>`).join("");
+  modal(`<h3>${esc(c.name)}</h3><small>${c.members.length} ${c.members.length === 1 ? "pessoa" : "pessoas"}</small><div class="pl">${rows}</div>`
+    + (own ? '<button class="fbtn" id="gadd">Adicionar pessoas</button>' : "")
+    + '<button class="fbtn dng" id="glv">Sair do grupo</button>'
+    + (own ? '<button class="fbtn dng" id="gdl">Apagar grupo</button>' : ""));
+  if (own) {
+    $("#gadd").onclick = addMembers;
+    $("#gdl").onclick = () => sure(`O grupo "${c.name}" será apagado para todos, com as mensagens.`, "Apagar grupo", () => deleteGroup(c));
+  }
+  $("#glv").onclick = () => sure(`Você vai sair do grupo "${c.name}".`, "Sair", () => leaveGroup(c));
+}
+async function leaveGroup(c) {
+  if (c.members.length <= 1) return deleteGroup(c);
+  const ref = doc(db, "chats", c.id);
+  if (c.owner === me.uid) await updateDoc(ref, {members: arrayRemove(me.uid), owner: c.members.find(m => m !== me.uid)});   // passa o grupo para outra pessoa
+  else await updateDoc(ref, {members: arrayRemove(me.uid)});
+  closeChat();
+}
+async function deleteGroup(c) {
+  const msgs = (await getDocs(collection(db, "chats", c.id, "messages"))).docs;
+  for (let i = 0; i < msgs.length; i += 15) {            // lotes pequenos por causa do limite das regras
+    const b = writeBatch(db); msgs.slice(i, i + 15).forEach(d => b.delete(d.ref)); await b.commit();
+  }
+  await deleteDoc(doc(db, "chats", c.id));
+  closeChat();
+}
 
 /* ---------- Status (24 horas) ---------- */
 function pgStatus(pg) {
@@ -400,13 +487,21 @@ async function startCall(u, name, video) {
   callTimer = setTimeout(() => { if ($("#cst")?.textContent === "Chamando...") hang(); }, 45000);
 }
 function incoming(d) {
-  if (pc || (d.at && Date.now() - d.at.toMillis() > 60000)) return;
+  if (pc || answering === d.id || (d.at && Date.now() - d.at.toMillis() > 60000)) return;
   const box = $("#inc"); box.hidden = false; navigator.vibrate?.([300, 150, 300]);
   box.innerHTML = `${av(d.callerName, d.caller)}<h2>${esc(d.callerName)}</h2><small>${d.video ? "Chamada de vídeo" : "Ligação de voz"}</small><div class="ctl"><button class="no" id="ir" title="Recusar">${ic("phone")}</button><button class="yes" id="ia" title="Atender">${ic("phone")}</button></div>`;
   $("#ir svg").style.transform = "rotate(135deg)";
   const un = onSnapshot(doc(db, "calls", d.id), s => { if (s.data()?.status !== "ringing") { box.hidden = true; un(); } });
   $("#ir").onclick = () => updateDoc(doc(db, "calls", d.id), {status: "declined"});
   $("#ia").onclick = () => { box.hidden = true; un(); answer(d); };
+}
+async function answerById(id) {
+  try {
+    const d = (await getDoc(doc(db, "calls", id))).data();
+    if (!d || d.status !== "ringing" || d.callee !== me.uid) return;
+    answering = id; await answer({id, ...d});
+  } catch {}
+  answering = null;
 }
 async function answer(d) {
   stream = await media(d.video);
