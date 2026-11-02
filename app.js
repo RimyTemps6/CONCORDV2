@@ -1,6 +1,6 @@
 import {initializeApp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-app.js";
 import {getAuth,GoogleAuthProvider,signInWithPopup,signInWithCredential,signOut,onAuthStateChanged} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-auth.js";
-import {getFirestore,doc,getDoc,setDoc,addDoc,updateDoc,deleteDoc,arrayUnion,arrayRemove,collection,query,where,orderBy,onSnapshot,getDocs,writeBatch,serverTimestamp} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
+import {getFirestore,doc,getDoc,setDoc,addDoc,updateDoc,deleteDoc,arrayUnion,arrayRemove,collection,query,where,orderBy,onSnapshot,getDocs,writeBatch,serverTimestamp,limitToLast,deleteField} from "https://www.gstatic.com/firebasejs/10.14.1/firebase-firestore.js";
 import {firebaseConfig} from "./firebase-config.js";
 
 const app = initializeApp(firebaseConfig), auth = getAuth(app), db = getFirestore(app);
@@ -37,6 +37,7 @@ window.openPendingChat = () => {
 };
 async function logout() {
   try { if (NATIVE && me) await deleteDoc(doc(db, "fcmTokens", me.uid)); } catch {}
+  try { NATIVE?.signedOut?.(); } catch {}
   signOut(auth);
 }
 
@@ -59,7 +60,14 @@ const IC = {
   sun: '<circle cx="12" cy="12" r="4"/><path d="M12 2v2M12 20v2M4.9 4.9l1.4 1.4M17.7 17.7l1.4 1.4M2 12h2M20 12h2M4.9 19.1l1.4-1.4M17.7 6.3l1.4-1.4"/>',
   moon: '<path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/>',
   out: '<path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/>',
-  send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>'
+  send: '<path d="M22 2L11 13M22 2l-7 20-4-9-9-4 20-7z"/>',
+  smile: '<circle cx="12" cy="12" r="10"/><path d="M8 14s1.5 2 4 2 4-2 4-2M9 9h.01M15 9h.01"/>',
+  clip: '<path d="M21.4 11.1l-9.2 9.2a6 6 0 0 1-8.5-8.5l9.2-9.2a4 4 0 0 1 5.7 5.7l-9.2 9.2a2 2 0 0 1-2.8-2.8l8.5-8.5"/>',
+  x: '<path d="M18 6L6 18M6 6l12 12"/>',
+  play: '<path d="M6 4l14 8-14 8z" fill="currentColor"/>',
+  pause: '<path d="M7 4h3v16H7zM14 4h3v16h-3z" fill="currentColor"/>',
+  file: '<path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/>',
+  edit: '<path d="M12 20h9M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1 1-4z"/>'
 };
 const ic = n => `<svg class="i" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">${IC[n]}</svg>`;
 $$("[data-i]").forEach(e => e.innerHTML = ic(e.dataset.i));
@@ -102,7 +110,7 @@ async function enter(u) {
       S.chats = s.docs.map(d => ({id: d.id, ...d.data()}));
       if (cur) {
         const f = S.chats.find(x => x.id === cur.id);
-        if (f) { const mudou = f.members.length !== cur.members.length || f.name !== cur.name || f.owner !== cur.owner; cur = f; if (mudou) head(); }
+        if (f) { const mudou = f.members.length !== cur.members.length || f.name !== cur.name || f.owner !== cur.owner || f.photo !== cur.photo; cur = f; if (mudou) head(); }
         else if (had) closeChat();
       }
       renderList(); window.openPendingChat();
@@ -115,8 +123,8 @@ async function enter(u) {
       s => s.docChanges().forEach(c => c.type === "added" && incoming({id: c.doc.id, ...c.doc.data()})))
   ];
   renderList();
-  if (NATIVE) NATIVE.requestToken();
-  window.answerCall(); window.openPendingChat();
+  if (NATIVE) { NATIVE.requestToken(); NATIVE.loggedIn?.(); }   // o app liga a conexão em segundo plano
+  window.answerCall(); window.openPendingChat(); cleanupStatuses();
 }
 function leave() {
   hang(); unsubs.forEach(f => f()); unsubs = []; unsubMsgs && unsubMsgs();
@@ -143,7 +151,7 @@ function pgChats(pg) {
   pg.innerHTML = '<div class="sec">GRUPOS</div><div class="tiles" id="tiles"></div><div class="sec">RECENTES</div><div class="card" id="rows"></div>';
   all.filter(c => c.type === "group").forEach(c => {
     const t = document.createElement("button"); t.className = "tile";
-    t.innerHTML = av(c.name, null, 1) + `<small>${esc(c.name)}</small>`; t.onclick = () => openChat(c); $("#tiles").append(t);
+    t.innerHTML = chatAv(c, 1) + `<small>${esc(c.name)}</small>`; t.onclick = () => openChat(c); $("#tiles").append(t);
   });
   const n = document.createElement("button"); n.className = "tile";
   n.innerHTML = `<div class="av sq plus">${ic("plus")}</div><small>Criar</small>`; n.onclick = newGroup; $("#tiles").append(n);
@@ -151,7 +159,7 @@ function pgChats(pg) {
   ensureP(rows.map(other));
   rows.forEach(c => {
     const b = document.createElement("button"); b.className = "ci" + (cur?.id === c.id ? " on" : "");
-    b.innerHTML = av(title(c), other(c)) + `<div class="mid"><b>${esc(title(c))}</b><small>${esc(c.last || "Diga olá")}</small></div><time>${hm(c.updatedAt)}</time>`;
+    b.innerHTML = chatAv(c) + `<div class="mid"><b>${esc(title(c))}</b><small>${esc(c.last || "Diga olá")}</small></div><time>${hm(c.updatedAt)}</time>`;
     b.onclick = () => openChat(c); $("#rows").append(b);
   });
 }
@@ -160,48 +168,356 @@ function chooser() {
   $("#c1").onclick = addPersonModal; $("#c2").onclick = newGroup;
 }
 
+/* ---------- Mídia: fotos, áudio, arquivos e vídeos ficam em pedaços no próprio Firestore (sem Storage, sem custo) ---------- */
+const CHUNK = 600000, MAXFILE = 2500000;
+const rid = () => (crypto.randomUUID ? crypto.randomUUID().replace(/-/g, "") : Math.random().toString(36).slice(2) + Date.now().toString(36));
+async function saveMedia(kind, ref, dataUrl) {
+  const b64 = dataUrl.slice(dataUrl.indexOf(",") + 1), n = Math.max(1, Math.ceil(b64.length / CHUNK)), mid = rid();
+  for (let i = 0; i < n; i++) await setDoc(doc(db, "media", `${mid}_${i}`), {kind, ref, owner: me.uid, d: b64.slice(i * CHUNK, (i + 1) * CHUNK)});
+  return {mid, n};
+}
+const dropMedia = (mid, n) => mid ? Promise.all(Array.from({length: n || 0}, (_, i) => deleteDoc(doc(db, "media", `${mid}_${i}`)).catch(() => {}))) : Promise.resolve();
+const mcache = new Map();
+function loadMedia(mid, n, mime) {
+  if (!mcache.has(mid)) mcache.set(mid, (async () => {
+    const parts = await Promise.all(Array.from({length: n}, (_, i) => getDoc(doc(db, "media", `${mid}_${i}`))));
+    if (parts.some(p => !p.exists())) throw new Error("falta pedaço");
+    const blob = await (await fetch(`data:${mime};base64,` + parts.map(p => p.data().d).join(""))).blob();
+    return URL.createObjectURL(blob);
+  })().catch(e => { mcache.delete(mid); throw e; }));
+  return mcache.get(mid);
+}
+const fmtSize = b => b < 1024 ? b + " B" : b < 1048576 ? Math.round(b / 1024) + " KB" : (b / 1048576).toFixed(1) + " MB";
+const fmtDur = s => Math.floor(s / 60) + ":" + String(Math.floor(s % 60)).padStart(2, "0");
+const loadImg = src => new Promise((ok, no) => { const i = new Image(); i.onload = () => ok(i); i.onerror = no; i.src = src; });
+function thumbOf(im) {
+  const k = 32 / Math.max(im.width, im.height), c = document.createElement("canvas");
+  c.width = Math.max(1, Math.round(im.width * k)); c.height = Math.max(1, Math.round(im.height * k));
+  c.getContext("2d").drawImage(im, 0, 0, c.width, c.height); return c.toDataURL("image/jpeg", 0.5);
+}
+async function prepImage(file) {
+  const src = await readFile(file), im = await loadImg(src);
+  if (file.type === "image/gif" && file.size <= 560000) return {url: src, w: im.width, h: im.height, thumb: thumbOf(im), mime: "image/gif"};
+  let max = 1280, q = 0.74, url, c;
+  for (let t = 0; t < 5; t++) {
+    const k = Math.min(1, max / Math.max(im.width, im.height));
+    c = document.createElement("canvas"); c.width = Math.round(im.width * k); c.height = Math.round(im.height * k);
+    c.getContext("2d").drawImage(im, 0, 0, c.width, c.height); url = c.toDataURL("image/jpeg", q);
+    if (url.length < 560000) break;
+    max *= 0.8; q = Math.max(0.45, q - 0.08);
+  }
+  return {url, w: c.width, h: c.height, thumb: thumbOf(im), mime: "image/jpeg"};
+}
+// Vídeo de status: regrava em 480p / ~450 kbps, no máximo 20 s (leva o tempo do vídeo)
+async function prepVideo(file) {
+  if (!window.MediaRecorder) throw new Error("Este aparelho não consegue preparar vídeo.");
+  const v = document.createElement("video"), src = URL.createObjectURL(file);
+  v.src = src; v.playsInline = true; v.preload = "auto";
+  await new Promise((ok, no) => { v.onloadedmetadata = ok; v.onerror = () => no(new Error("Não consegui ler esse vídeo.")); });
+  const dur = Math.min(isFinite(v.duration) ? v.duration : 20, 20);
+  const k = Math.min(1, 480 / Math.min(v.videoWidth, v.videoHeight)), w = Math.round(v.videoWidth * k / 2) * 2, h = Math.round(v.videoHeight * k / 2) * 2;
+  const c = document.createElement("canvas"); c.width = w; c.height = h; const ctx = c.getContext("2d");
+  const out = c.captureStream(24);
+  let ac = null;
+  try {
+    ac = new (window.AudioContext || window.webkitAudioContext)(); await ac.resume();
+    const dest = ac.createMediaStreamDestination(); ac.createMediaElementSource(v).connect(dest);
+    dest.stream.getAudioTracks().forEach(t => out.addTrack(t));
+  } catch {}
+  const mime = ["video/webm;codecs=vp8,opus", "video/webm;codecs=vp8", "video/webm"].find(t => MediaRecorder.isTypeSupported(t));
+  const mr = new MediaRecorder(out, {mimeType: mime, videoBitsPerSecond: 450000, audioBitsPerSecond: 40000}), parts = [];
+  mr.ondataavailable = e => e.data.size && parts.push(e.data);
+  let raf = 0; const draw = () => { ctx.drawImage(v, 0, 0, w, h); raf = requestAnimationFrame(draw); };
+  await new Promise((ok, no) => {
+    const stop = () => { if (mr.state !== "inactive") mr.stop(); };
+    mr.onstop = ok; v.onended = stop; setTimeout(stop, dur * 1000 + 400);
+    mr.start(); v.play().then(draw).catch(() => { stop(); no(new Error("Não consegui tocar esse vídeo.")); });
+  });
+  cancelAnimationFrame(raf); v.pause(); URL.revokeObjectURL(src); ac && ac.close().catch(() => {});
+  const blob = new Blob(parts, {type: "video/webm"});
+  if (blob.size > MAXFILE) throw new Error("Vídeo grande demais. Escolha um mais curto.");
+  return {blob, url: await readFile(blob), mime: "video/webm"};
+}
+async function saveBlob(url, mime, name) {
+  if (NATIVE?.saveFile) {
+    const blob = await (await fetch(url)).blob(), d = await readFile(blob);
+    NATIVE.saveFile(name, mime, d.slice(d.indexOf(",") + 1));
+  } else { const a = document.createElement("a"); a.href = url; a.download = name; document.body.append(a); a.click(); a.remove(); }
+}
+let toastT;
+function toast(t, ms = 2600) {
+  let e = $("#toast"); if (!e) { e = document.createElement("div"); e.id = "toast"; document.body.append(e); }
+  e.textContent = t; e.hidden = false; clearTimeout(toastT); toastT = setTimeout(() => e.hidden = true, ms);
+}
+
 /* ---------- Chat em tempo real ---------- */
+const chatAv = (c, sq) => c.type === "group"
+  ? (c.photo ? `<div class="av${sq ? " sq" : ""}"><img src="${c.photo}" alt=""></div>` : av(c.name, null, sq))
+  : av(title(c), other(c), sq);
 function head() {
   const c = cur, g = c.type === "group";
   const sub = g ? c.members.map(m => c.names?.[m]).filter(Boolean).join(", ") : "Toque para ver o perfil";
-  $("#chHead").innerHTML = av(title(c), other(c)) + `<div class="grow"><b>${esc(title(c))}</b><small>${esc(sub)}</small></div>`;
+  $("#chHead").innerHTML = chatAv(c) + `<div class="grow"><b>${esc(title(c))}</b><small>${esc(sub)}</small></div>`;
   $("#chHead").onclick = () => g ? groupInfo() : openProfile(other(c));
   $("#bCall").hidden = $("#bVid").hidden = g; $("#bMem").hidden = !(g && c.owner === me.uid);
 }
 function closeChat() {
-  unsubMsgs && unsubMsgs(); unsubMsgs = null; cur = null;
+  unsubMsgs && unsubMsgs(); unsubMsgs = null; cur = null; hideBoxes();
   $("#app").classList.remove("inchat");
   $("#chHead").innerHTML = "<b>Concord</b>"; $("#chHead").onclick = null;
   $("#bCall").hidden = $("#bVid").hidden = $("#bMem").hidden = true;
   $("#msgs").innerHTML = '<p class="empty">Escolha uma conversa para começar.</p>';
   renderList();
 }
+let msgLimit = 60, draftMentions = {};
 function openChat(c) {
-  cur = c; unsubMsgs && unsubMsgs();
-  const g = c.type === "group";
+  cur = c; msgLimit = 60; draftMentions = {}; hideBoxes(); $("#txt").value = ""; syncComposer();
   ensureP([other(c)]); head();
   $("#app").classList.add("inchat"); renderList();
-  unsubMsgs = onSnapshot(query(collection(db, "chats", c.id, "messages"), orderBy("at")), s => {
-    const box = $("#msgs"); box.innerHTML = "";
-    if (s.empty) box.innerHTML = '<p class="empty">Nenhuma mensagem ainda. Diga olá.</p>';
-    s.docs.forEach(d => {
-      const m = d.data(), mine = m.from === me.uid, p = document.createElement("div");
-      p.className = "m" + (mine ? " me" : "");
-      p.innerHTML = (g && !mine ? `<span class="who" style="color:hsl(${hue(m.name)},60%,45%)">${esc(m.name || "")}</span>` : "") + `<span>${esc(m.text)}</span><time>${hm(m.at)}</time>`;
-      box.append(p);
+  bindMessages();
+}
+
+// Texto com @menções em destaque
+const fmt = m => {
+  let h = esc(m.text);
+  Object.values(m.mn || {}).forEach(n => { h = h.split("@" + esc(n)).join(`<b class="at">@${esc(n)}</b>`); });
+  return h;
+};
+const lazyObs = new IntersectionObserver(es => es.forEach(e => { if (e.isIntersecting) { lazyObs.unobserve(e.target); e.target._load && e.target._load(); } }), {rootMargin: "300px"});
+let playing = null;
+
+function bubble(id, m, g, chatId) {
+  const mine = m.from === me.uid, p = document.createElement("div");
+  p.className = "m" + (mine ? " me" : "") + (m.mentions?.includes(me.uid) ? " ment" : "");
+  p.dataset.id = id;
+  const who = g && !mine ? `<span class="who" style="color:hsl(${hue(m.name)},60%,45%)">${esc(m.name || "")}</span>` : "", t = `<time>${hm(m.at)}</time>`;
+
+  if (m.type === "image") {
+    p.innerHTML = who + `<div class="img" style="aspect-ratio:${m.w || 4}/${m.h || 3};background-image:url(${m.thumb || ""})"></div>` + t;
+    const box = p.querySelector(".img");
+    box._load = () => loadMedia(m.mid, m.n, m.mime).then(u => { box.innerHTML = `<img src="${u}" alt="">`; }).catch(() => {});
+    lazyObs.observe(box); box.onclick = () => openViewer(m);
+  } else if (m.type === "audio") {
+    p.innerHTML = who + `<div class="aud"><button type="button" class="play">${ic("play")}</button><div class="bar"><i></i></div><small class="dur">${fmtDur(m.dur || 0)}</small></div>` + t;
+    const btn = p.querySelector(".play"), bar = p.querySelector(".bar i"), dur = p.querySelector(".dur"); let a = null;
+    btn.onclick = async () => {
+      if (!a) {
+        btn.disabled = true;
+        try { a = new Audio(await loadMedia(m.mid, m.n, m.mime)); } catch { btn.disabled = false; dur.textContent = "erro"; return; }
+        btn.disabled = false;
+        const total = () => isFinite(a.duration) && a.duration > 0 ? a.duration : (m.dur || 1);
+        a.ontimeupdate = () => { bar.style.width = Math.min(100, a.currentTime / total() * 100) + "%"; dur.textContent = fmtDur(a.currentTime); };
+        a.onended = () => { btn.innerHTML = ic("play"); bar.style.width = "0"; dur.textContent = fmtDur(m.dur || 0); playing = null; };
+        a.onpause = () => { btn.innerHTML = ic("play"); };
+        a.onplay = () => { btn.innerHTML = ic("pause"); };
+      }
+      if (a.paused) { if (playing && playing !== a) playing.pause(); playing = a; a.play().catch(() => {}); } else a.pause();
+    };
+  } else if (m.type === "file") {
+    p.innerHTML = who + `<button type="button" class="fil">${ic("file")}<span>${esc(m.fname || "arquivo")}<br><small>${fmtSize(m.size || 0)} · toque para salvar</small></span></button>` + t;
+    p.querySelector(".fil").onclick = async () => {
+      try { toast("Baixando…"); saveBlob(await loadMedia(m.mid, m.n, m.mime), m.mime, m.fname || "arquivo"); }
+      catch { toast("Não foi possível baixar o arquivo."); }
+    };
+  } else if (m.type === "poll") {
+    const votes = m.votes || {}, counts = m.opts.map((_, i) => Object.values(votes).filter(v => v === i).length), total = Object.keys(votes).length, mineV = votes[me.uid];
+    p.innerHTML = who + `<div class="poll"><b>📊 ${esc(m.q)}</b>` + m.opts.map((o, i) => `<button type="button" class="op${mineV === i ? " on" : ""}" data-o="${i}"><i style="width:${total ? counts[i] / total * 100 : 0}%"></i><span>${esc(o)}</span><span>${counts[i]}</span></button>`).join("") + `<small>${total} ${total === 1 ? "voto" : "votos"} · toque para votar</small></div>` + t;
+    p.querySelectorAll(".op").forEach(b => b.onclick = () => {
+      const i = +b.dataset.o;
+      updateDoc(doc(db, "chats", chatId, "messages", id), {["votes." + me.uid]: mineV === i ? deleteField() : i}).catch(() => toast("Não foi possível votar. Publique as novas regras."));
     });
-    box.scrollTop = box.scrollHeight;
+  } else {
+    p.innerHTML = who + `<span class="tx">${fmt(m)}</span>` + t;
+  }
+  return p;
+}
+async function openViewer(m) {
+  const vw = $("#vw"); vw.hidden = false; vw.innerHTML = '<p style="color:#fff">Carregando…</p>';
+  vw.onclick = e => { if (e.target.id !== "vs") vw.hidden = true; };
+  try {
+    const u = await loadMedia(m.mid, m.n, m.mime), ext = (m.mime.split("/")[1] || "jpg").replace("jpeg", "jpg");
+    vw.innerHTML = `<img src="${u}" alt=""><div class="bt"><button id="vs">Salvar</button><button id="vx">Fechar</button></div>`;
+    $("#vs").onclick = () => saveBlob(u, m.mime, "concord-" + Date.now() + "." + ext);
+  } catch { vw.innerHTML = '<p style="color:#fff">Não foi possível carregar a foto.</p>'; }
+}
+
+function bindMessages() {
+  unsubMsgs && unsubMsgs();
+  const c = cur, g = c.type === "group", box = $("#msgs"), els = new Map(); let first = true;
+  box.innerHTML = '<p class="empty" id="mhead">Carregando…</p>';
+  unsubMsgs = onSnapshot(query(collection(db, "chats", c.id, "messages"), orderBy("at"), limitToLast(msgLimit)), s => {
+    const near = first || box.scrollHeight - box.scrollTop - box.clientHeight < 140;
+    s.docChanges().forEach(ch => {
+      const id = ch.doc.id, m = ch.doc.data();
+      if (ch.type === "removed") { els.get(id)?.remove(); els.delete(id); return; }
+      if (ch.type === "modified" && els.has(id)) {
+        const old = els.get(id);
+        if (m.type === "poll") { const n = bubble(id, m, g, c.id); old.replaceWith(n); els.set(id, n); }
+        else { const tm = old.querySelector("time"); if (tm) tm.textContent = hm(m.at); }
+        if (ch.oldIndex !== ch.newIndex) box.insertBefore(els.get(id), box.children[ch.newIndex + 1] || null);
+        return;
+      }
+      const el = bubble(id, m, g, c.id); els.set(id, el);
+      box.insertBefore(el, box.children[ch.newIndex + 1] || null);
+    });
+    const h = $("#mhead");
+    h.innerHTML = s.size >= msgLimit ? '<button class="lnk" id="mmore">Ver mensagens anteriores</button>' : (s.empty ? "Nenhuma mensagem ainda. Diga olá." : "");
+    h.hidden = !h.innerHTML;
+    if (s.size >= msgLimit) $("#mmore").onclick = () => { msgLimit += 60; bindMessages(); };
+    if (near) box.scrollTop = box.scrollHeight;
+    first = false;
   });
+}
+
+async function sendMsg(chat, data, preview) {
+  if (!chat) return;
+  const b = writeBatch(db);
+  b.set(doc(collection(db, "chats", chat.id, "messages")), {from: me.uid, name: me.name, at: serverTimestamp(), ...data});
+  b.update(doc(db, "chats", chat.id), {last: ((chat.type === "group" ? me.name + ": " : "") + preview).slice(0, 200), lastFrom: me.uid, lastMentions: data.mentions || [], updatedAt: serverTimestamp()});
+  await b.commit();
 }
 $("#fSend").onsubmit = async e => {
   e.preventDefault();
-  const t = $("#txt").value.trim(); if (!t || !cur) return;
-  $("#txt").value = "";
-  const b = writeBatch(db);
-  b.set(doc(collection(db, "chats", cur.id, "messages")), {from: me.uid, name: me.name, text: t, at: serverTimestamp()});
-  b.update(doc(db, "chats", cur.id), {last: (cur.type === "group" ? me.name + ": " : "") + t, updatedAt: serverTimestamp()});
-  await b.commit();
+  const t = $("#txt").value.trim(), chat = cur; if (!t || !chat) return;
+  const mn = {}; for (const u in draftMentions) if (t.includes("@" + draftMentions[u])) mn[u] = draftMentions[u];
+  $("#txt").value = ""; draftMentions = {}; syncComposer(); hideBoxes();
+  const extra = Object.keys(mn).length ? {mentions: Object.keys(mn), mn} : {};
+  try { await sendMsg(chat, {type: "text", text: t, ...extra}, t); } catch { toast("Não foi possível enviar."); }
 };
+
+/* ---------- Compositor: emojis, @menções, anexos, áudio, enquete ---------- */
+const hideBoxes = () => { $("#emojiBox").hidden = true; $("#mentionBox").hidden = true; };
+function syncComposer() {
+  const has = $("#txt").value.trim().length > 0;
+  $("#bSend").hidden = !has; $("#bMic").hidden = has;
+}
+function insertAtCaret(str) {
+  const t = $("#txt"), on = document.activeElement === t, a = on ? t.selectionStart : t.value.length, b = on ? t.selectionEnd : t.value.length;
+  t.setRangeText(str, a, b, "end"); syncComposer();
+}
+$("#txt").addEventListener("input", () => { syncComposer(); mentionCheck(); });
+
+const EMOJI = {
+  "😀": "😀 😃 😄 😁 😆 😅 😂 🤣 🥲 😊 😇 🙂 🙃 😉 😌 😍 🥰 😘 😗 😙 😚 😋 😛 😝 😜 🤪 🤨 🧐 🤓 😎 🥸 🤩 🥳 😏 😒 😞 😔 😟 😕 🙁 😣 😖 😫 😩 🥺 😢 😭 😤 😠 😡 🤬 🤯 😳 🥵 🥶 😱 😨 😰 😥 😓 🤗 🤔 🫣 🤭 🫢 🤫 🫡 😶 😐 😑 😬 🙄 😯 😦 😧 😮 😲 🥱 😴 🤤 😪 😵 🤐 🥴 🤢 🤮 🤧 😷 🤒 🤕".split(" "),
+  "👍": "👍 👎 👌 🤌 ✌️ 🤞 🫰 🤟 🤘 🤙 👈 👉 👆 👇 ☝️ ✋ 🤚 🖐️ 🖖 👋 🤝 🙏 ✍️ 💪 🙌 👏 🫶 👐 🤲 🫵 💅".split(" "),
+  "❤️": "❤️ 🧡 💛 💚 💙 💜 🖤 🤍 🤎 💔 💕 💞 💓 💗 💖 💘 💝 💟 ♥️ 😻 💋 💯 💢 💥 💫 💦 💨 🔥 ✨ ⭐ 🌟 🎉 🎊 🎈".split(" "),
+  "🐶": "🐶 🐱 🐭 🐹 🐰 🦊 🐻 🐼 🐨 🐯 🦁 🐮 🐷 🐸 🐵 🙈 🙉 🙊 🐔 🐧 🐦 🦆 🦉 🦄 🐝 🦋 🐢 🐍 🐙 🐬 🐳 🦈 🌸 🌹 🌻 🌈 ☀️ 🌙 ⚡ ❄️ 🌊".split(" "),
+  "🍕": "🍎 🍌 🍉 🍇 🍓 🍒 🍑 🥭 🍍 🥝 🍅 🥑 🌽 🥕 🍞 🧀 🍔 🍟 🍕 🌭 🌮 🍣 🍜 🍝 🍩 🍪 🎂 🍰 🍫 🍿 ☕ 🍺 🍷 🥤".split(" "),
+  "⚽": "⚽ 🏀 🏈 ⚾ 🎾 🏐 🎮 🎧 🎤 🎬 🎨 🎯 🎲 🚗 ✈️ 🚀 🏠 🌍 📱 💻 📷 🔔 🎁 💡 📌 📎 ✅ ❌ ⚠️ ❓ ❗ 💬 👀 🧠 🦾".split(" ")
+};
+function buildEmoji() {
+  const box = $("#emojiBox"), keys = Object.keys(EMOJI);
+  box.innerHTML = '<div class="tabs2"></div><div class="eg"></div>';
+  const show = k => {
+    $$("#emojiBox .tabs2 button").forEach(b => b.classList.toggle("on", b.textContent === k));
+    const g = $("#emojiBox .eg"); g.innerHTML = "";
+    EMOJI[k].forEach(e => { const b = document.createElement("button"); b.type = "button"; b.textContent = e; b.onclick = () => insertAtCaret(e); g.append(b); });
+    g.scrollTop = 0;
+  };
+  keys.forEach(k => { const b = document.createElement("button"); b.type = "button"; b.textContent = k; b.onclick = () => show(k); $("#emojiBox .tabs2").append(b); });
+  show(keys[0]);
+}
+$("#bEmoji").onclick = () => {
+  const b = $("#emojiBox");
+  if (b.hidden) { if (!b.innerHTML) buildEmoji(); b.hidden = false; $("#mentionBox").hidden = true; } else b.hidden = true;
+};
+
+function mentionCheck() {
+  const box = $("#mentionBox"), t = $("#txt");
+  const m = cur && t.value.slice(0, t.selectionStart).match(/(?:^|\s)@([^\s@]{0,20})$/);
+  if (!m) { box.hidden = true; return; }
+  const q = m[1].toLowerCase();
+  const list = cur.members.filter(u => u !== me.uid).map(u => ({uid: u, name: cur.names?.[u] || P[u]?.name || "?"}))
+    .filter(x => x.name.toLowerCase().includes(q)).slice(0, 6);
+  if (!list.length) { box.hidden = true; return; }
+  box.innerHTML = "";
+  list.forEach(x => {
+    const b = document.createElement("button"); b.type = "button"; b.innerHTML = av(x.name, x.uid) + `<span>${esc(x.name)}</span>`;
+    b.onmousedown = e => e.preventDefault(); b.onclick = () => pickMention(x, m[1]); box.append(b);
+  });
+  box.hidden = false; $("#emojiBox").hidden = true;
+}
+function pickMention(x, q) {
+  const t = $("#txt"), end = t.selectionStart, start = end - q.length - 1;
+  t.setRangeText("@" + x.name + " ", start, end, "end"); draftMentions[x.uid] = x.name;
+  $("#mentionBox").hidden = true; syncComposer(); t.focus();
+}
+
+const pickFile = (accept, fn) => {
+  const i = document.createElement("input"); i.type = "file"; i.accept = accept;
+  i.onchange = () => { const f = i.files[0]; if (f) { closeModal(); fn(f); } }; i.click();
+};
+$("#bClip").onclick = () => {
+  if (!cur) return;
+  modal('<h3>Anexar</h3><button class="fbtn" id="a1">Foto</button><button class="fbtn" id="a2">Arquivo</button><button class="fbtn" id="a3">Enquete</button>');
+  $("#a1").onclick = () => pickFile("image/*", sendPhoto);
+  $("#a2").onclick = () => pickFile("*/*", sendFile);
+  $("#a3").onclick = newPoll;
+};
+async function sendPhoto(f) {
+  const chat = cur; if (!chat) return;
+  try {
+    toast("Enviando foto…", 60000);
+    const im = await prepImage(f), {mid, n} = await saveMedia("chat", chat.id, im.url);
+    await sendMsg(chat, {type: "image", mid, n, mime: im.mime, w: im.w, h: im.h, thumb: im.thumb}, "📷 Foto"); toast("Foto enviada");
+  } catch { toast("Não foi possível enviar a foto. Publique as novas regras no Firebase."); }
+}
+async function sendFile(f) {
+  const chat = cur; if (!chat) return;
+  if (f.size > MAXFILE) return toast("Arquivo grande demais. O máximo é " + fmtSize(MAXFILE) + " (limite do plano grátis).");
+  try {
+    toast("Enviando arquivo…", 60000);
+    const mime = f.type || "application/octet-stream", {mid, n} = await saveMedia("chat", chat.id, await readFile(f));
+    await sendMsg(chat, {type: "file", mid, n, mime, fname: f.name, size: f.size}, "📎 " + f.name); toast("Arquivo enviado");
+  } catch { toast("Não foi possível enviar o arquivo. Publique as novas regras no Firebase."); }
+}
+function newPoll() {
+  const chat = cur;
+  modal('<h3>Nova enquete</h3><input id="pq" maxlength="100" placeholder="Pergunta"><div id="pops"></div><button class="fbtn" id="padd">+ Adicionar opção</button><button class="btn" id="pgo">Enviar enquete</button><p id="addErr"></p>');
+  const add = () => { if ($$("#pops input").length >= 6) return; const i = document.createElement("input"); i.maxLength = 40; i.placeholder = "Opção " + ($$("#pops input").length + 1); $("#pops").append(i); };
+  add(); add(); $("#padd").onclick = add;
+  $("#pgo").onclick = async () => {
+    const q = $("#pq").value.trim(), opts = $$("#pops input").map(i => i.value.trim()).filter(Boolean);
+    if (!q) return $("#addErr").textContent = "Escreva a pergunta.";
+    if (opts.length < 2) return $("#addErr").textContent = "Coloque pelo menos 2 opções.";
+    try { await sendMsg(chat, {type: "poll", q, opts, votes: {}}, "📊 Enquete: " + q); await closeModal(); }
+    catch { $("#addErr").textContent = "Não foi possível enviar. Publique as novas regras no Firebase."; }
+  };
+}
+
+// Áudio: toque no microfone para gravar, toque em enviar (✓) ou cancelar (✕)
+let rec = null;
+async function recStart() {
+  if (!cur || rec) return;
+  if (pc) return toast("Termine a ligação para gravar áudio.");
+  if (!window.MediaRecorder) return toast("Este aparelho não grava áudio.");
+  let st; try { st = await navigator.mediaDevices.getUserMedia({audio: true}); } catch { return toast("Permita o microfone para gravar áudio."); }
+  const mime = ["audio/webm;codecs=opus", "audio/webm", "audio/mp4"].find(t => MediaRecorder.isTypeSupported(t));
+  const mr = new MediaRecorder(st, mime ? {mimeType: mime, audioBitsPerSecond: 24000} : {audioBitsPerSecond: 24000}), parts = [];
+  mr.ondataavailable = e => e.data.size && parts.push(e.data);
+  rec = {mr, st, parts, t0: Date.now(), chat: cur, mime: (mr.mimeType || mime || "audio/webm").split(";")[0]};
+  rec.timer = setInterval(() => { const s = (Date.now() - rec.t0) / 1000; $("#recT").textContent = fmtDur(s); if (s >= 120) recStop(true); }, 250);
+  mr.start(500); $("#recT").textContent = "0:00"; $("#recBar").hidden = false; $("#fSend").hidden = true; hideBoxes();
+}
+function recStop(send) {
+  const r = rec; if (!r) return; rec = null; clearInterval(r.timer);
+  $("#recBar").hidden = true; $("#fSend").hidden = false;
+  r.mr.onstop = async () => {
+    r.st.getTracks().forEach(t => t.stop());
+    const dur = (Date.now() - r.t0) / 1000;
+    if (!send || dur < 0.7) return;
+    try {
+      toast("Enviando áudio…", 60000);
+      const blob = new Blob(r.parts, {type: r.mime});
+      if (blob.size > MAXFILE) return toast("Áudio grande demais.");
+      const {mid, n} = await saveMedia("chat", r.chat.id, await readFile(blob));
+      await sendMsg(r.chat, {type: "audio", mid, n, mime: r.mime, dur: Math.round(dur)}, "🎤 Áudio " + fmtDur(dur)); toast("Áudio enviado");
+    } catch { toast("Não foi possível enviar o áudio. Publique as novas regras no Firebase."); }
+  };
+  try { r.mr.stop(); } catch {}
+}
+$("#bMic").onclick = recStart; $("#recOk").onclick = () => recStop(true); $("#recX").onclick = () => recStop(false);
+
 $("#bBack").onclick = () => $("#app").classList.remove("inchat");
 $("#bCall").onclick = () => startCall(other(cur), title(cur), false);
 $("#bVid").onclick = () => startCall(other(cur), title(cur), true);
@@ -301,15 +617,32 @@ function groupInfo() {
   const c = cur; if (!c || c.type !== "group") return;
   const own = c.owner === me.uid; ensureP(c.members);
   const rows = c.members.map(m => `<div class="pr">${av(c.names?.[m], m)}<span class="nm">${esc(c.names?.[m] || "?")}${m === me.uid ? " (você)" : ""}</span>${m === c.owner ? '<span class="tag">dono</span>' : ""}</div>`).join("");
-  modal(`<h3>${esc(c.name)}</h3><small>${c.members.length} ${c.members.length === 1 ? "pessoa" : "pessoas"}</small><div class="pl">${rows}</div>`
-    + (own ? '<button class="fbtn" id="gadd">Adicionar pessoas</button>' : "")
+  modal(`<div class="gph">${chatAv(c, 1)}</div><h3>${esc(c.name)}</h3><small>${c.members.length} ${c.members.length === 1 ? "pessoa" : "pessoas"}</small><div class="pl">${rows}</div>`
+    + (own ? `<button class="fbtn" id="gedit">${ic("edit")} Editar nome e foto</button><button class="fbtn" id="gadd">Adicionar pessoas</button>` : "")
     + '<button class="fbtn dng" id="glv">Sair do grupo</button>'
     + (own ? '<button class="fbtn dng" id="gdl">Apagar grupo</button>' : ""));
   if (own) {
+    $("#gedit").onclick = editGroup;
     $("#gadd").onclick = addMembers;
     $("#gdl").onclick = () => sure(`O grupo "${c.name}" será apagado para todos, com as mensagens.`, "Apagar grupo", () => deleteGroup(c));
   }
   $("#glv").onclick = () => sure(`Você vai sair do grupo "${c.name}".`, "Sair", () => leaveGroup(c));
+}
+function editGroup() {
+  const c = cur; if (!c || c.owner !== me.uid) return;
+  let photo = null, clear = false;
+  modal(`<h3>Editar grupo</h3><div class="gph" id="gph">${chatAv(c, 1)}</div><label class="fbtn">Trocar foto do grupo<input type="file" id="gfp" accept="image/*" hidden></label>${c.photo ? '<button class="fbtn dng" id="gfx">Remover foto</button>' : ""}<input id="gnm" value="${esc(c.name)}" maxlength="30" placeholder="Nome do grupo"><button class="btn" id="gsv">Salvar</button><p id="addErr"></p>`);
+  $("#gfp").onchange = async e => {
+    const f = e.target.files[0]; if (!f) return;
+    photo = await shrink(f, 160, 160); clear = false; $("#gph").innerHTML = `<div class="av sq"><img src="${photo}" alt=""></div>`;
+  };
+  if ($("#gfx")) $("#gfx").onclick = () => { photo = null; clear = true; $("#gph").innerHTML = av(c.name, null, 1); };
+  $("#gsv").onclick = async () => {
+    const name = $("#gnm").value.trim(); if (!name) return $("#addErr").textContent = "Dê um nome ao grupo.";
+    const upd = {name}; if (photo) upd.photo = photo; else if (clear) upd.photo = deleteField();
+    try { await updateDoc(doc(db, "chats", c.id), upd); } catch { return $("#addErr").textContent = "Não foi possível salvar. Publique as novas regras no Firebase."; }
+    await closeModal();
+  };
 }
 async function leaveGroup(c) {
   if (c.members.length <= 1) return deleteGroup(c);
@@ -320,6 +653,7 @@ async function leaveGroup(c) {
 }
 async function deleteGroup(c) {
   const msgs = (await getDocs(collection(db, "chats", c.id, "messages"))).docs;
+  await Promise.all(msgs.map(d => d.data().mid ? dropMedia(d.data().mid, d.data().n) : null));
   for (let i = 0; i < msgs.length; i += 15) {            // lotes pequenos por causa do limite das regras
     const b = writeBatch(db); msgs.slice(i, i + 15).forEach(d => b.delete(d.ref)); await b.commit();
   }
@@ -345,26 +679,61 @@ function pgStatus(pg) {
 }
 function viewStatus(list, i) {
   const x = list[i], sv = $("#sv");
-  if (!x) { sv.hidden = true; return; }
-  sv.hidden = false; sv.style.background = x.color;
+  if (!x) { sv.hidden = true; sv.innerHTML = ""; return; }
+  sv.hidden = false; sv.style.background = x.type === "image" || x.type === "video" ? "#000" : x.color;
+  const body = x.type === "image" || x.type === "video"
+    ? `<div class="svm" id="svm"></div>${x.text ? `<p class="cap">${esc(x.text)}</p>` : ""}` : `<p>${esc(x.text)}</p>`;
   sv.innerHTML = `<div class="svb">${list.map((_, k) => `<i class="${k <= i ? "f" : ""}"></i>`).join("")}</div>
-    <div class="svh">${av(x.name, x.uid)}<div class="grow"><b>${esc(x.name)}</b><small style="color:#fffc">${hm(x.at)}</small></div>${x.uid === me.uid ? '<button id="svd">Apagar</button>' : ""}<button id="svx">Fechar</button></div><p>${esc(x.text)}</p>`;
+    <div class="svh">${av(x.name, x.uid)}<div class="grow"><b>${esc(x.name)}</b><small style="color:#fffc">${hm(x.at)}</small></div>${x.uid === me.uid ? '<button id="svd">Apagar</button>' : ""}<button id="svx">Fechar</button></div>${body}`;
+  if (x.mid) {
+    const box = $("#svm"); box.innerHTML = x.thumb ? `<img src="${x.thumb}" style="filter:blur(6px)" alt="">` : "Carregando…";
+    loadMedia(x.mid, x.n, x.mime).then(u => {
+      if ($("#svm") !== box) return;
+      box.innerHTML = x.type === "video" ? `<video src="${u}" autoplay playsinline loop></video>` : `<img src="${u}" alt="">`;
+    }).catch(() => { if ($("#svm") === box) box.textContent = "Não foi possível carregar."; });
+  }
   sv.onclick = e => {
-    if (e.target.id === "svx") sv.hidden = true;
-    else if (e.target.id === "svd") { deleteDoc(doc(db, "statuses", x.id)); sv.hidden = true; }
-    else viewStatus(list, i + 1);
+    if (e.target.id === "svx") { sv.hidden = true; sv.innerHTML = ""; }
+    else if (e.target.id === "svd") { dropStatus(x); sv.hidden = true; sv.innerHTML = ""; }
+    else if (e.target.tagName !== "VIDEO" || true) viewStatus(list, i + 1);
   };
 }
+const dropStatus = x => { deleteDoc(doc(db, "statuses", x.id)).catch(() => {}); dropMedia(x.mid, x.n); };
 function postStatus() {
-  let col = COLORS[0];
-  modal(`<h3>Novo status</h3><textarea id="stx" maxlength="140" placeholder="O que você está pensando?"></textarea><div class="sw">${COLORS.map((c, i) => `<i data-c="${c}" class="${i ? "" : "on"}" style="background:${c}"></i>`).join("")}</div><button class="btn" id="spub">Publicar</button>`);
+  let col = COLORS[0], file = null;
+  modal(`<h3>Novo status</h3><div id="spv"></div><textarea id="stx" maxlength="140" placeholder="O que você está pensando?"></textarea><label class="fbtn">Adicionar foto ou vídeo<input type="file" id="sfile" accept="image/*,video/*" hidden></label><div class="sw">${COLORS.map((c, i) => `<i data-c="${c}" class="${i ? "" : "on"}" style="background:${c}"></i>`).join("")}</div><button class="btn" id="spub">Publicar</button><p id="addErr"></p>`);
   $$(".sw i").forEach(i => i.onclick = () => { col = i.dataset.c; $$(".sw i").forEach(k => k.classList.toggle("on", k === i)); });
+  $("#sfile").onchange = e => {
+    file = e.target.files[0]; if (!file) return;
+    const u = URL.createObjectURL(file);
+    $("#spv").innerHTML = file.type.startsWith("video") ? `<video src="${u}" muted playsinline controls></video>` : `<img src="${u}" alt="">`;
+    $("#stx").placeholder = "Legenda (opcional)";
+  };
   $("#spub").onclick = async () => {
-    const text = $("#stx").value.trim(); if (!text) return;
+    const text = $("#stx").value.trim(), er = t => $("#addErr").textContent = t;
+    if (!text && !file) return er("Escreva algo ou escolha uma foto ou vídeo.");
+    const btn = $("#spub"); btn.disabled = true;
     const viewers = [...new Set([me.uid, ...S.chats.filter(c => c.type !== "group").map(other)])];
-    await setDoc(doc(collection(db, "statuses")), {uid: me.uid, name: me.name, text, color: col, at: serverTimestamp(), viewers});
+    try {
+      const data = {uid: me.uid, name: me.name, text, color: col, at: serverTimestamp(), viewers, type: "text"};
+      if (file) {
+        let kind = "image", url, mime, thumb = "";
+        if (file.type.startsWith("video")) { btn.textContent = "Preparando vídeo…"; const v = await prepVideo(file); url = v.url; mime = v.mime; kind = "video"; }
+        else { btn.textContent = "Enviando…"; const im = await prepImage(file); url = im.url; mime = im.mime; thumb = im.thumb; }
+        const {mid, n} = await saveMedia("status", "status", url);
+        Object.assign(data, {type: kind, mid, n, mime, thumb});
+      }
+      await setDoc(doc(collection(db, "statuses")), data);
+    } catch (x) { btn.disabled = false; btn.textContent = "Publicar"; return er(x?.message?.startsWith("Vídeo") || x?.message?.startsWith("Não consegui") || x?.message?.startsWith("Este aparelho") ? x.message : "Não foi possível publicar. Publique as novas regras no Firebase."); }
     await closeModal(); S.tab = "status"; renderList();
   };
+}
+// apaga meus status com mais de 24 h (e as mídias deles)
+async function cleanupStatuses() {
+  try {
+    const s = await getDocs(query(collection(db, "statuses"), where("uid", "==", me.uid)));
+    s.docs.forEach(d => { const x = d.data(); if (x.at && x.at.toMillis() < Date.now() - 864e5) dropStatus({id: d.id, ...x}); });
+  } catch {}
 }
 
 /* ---------- Perfil: foto, banner (inclui GIF animado) e recado ---------- */
@@ -422,19 +791,23 @@ async function openProfile(u) {
 
 /* ---------- Ligações privadas (WebRTC) com compartilhamento de tela ---------- */
 const ICE = {iceServers: [{urls: "stun:stun.l.google.com:19302"}]};
+let nativeShare = false, nsCanvas = null, nsCtx = null, nsBusy = false;
 let pc = null, stream = null, share = null, vs = null, callRef = null, callUnsubs = [], callTimer = null;
 async function hang(status = "ended") {
   callUnsubs.forEach(f => f()); callUnsubs = []; clearTimeout(callTimer);
   if (callRef) { updateDoc(callRef, {status}).catch(() => {}); callRef = null; }
+  if (nativeShare) { nativeShare = false; try { NATIVE.stopScreenShare(); } catch {} }
+  try { NATIVE?.callEnded?.(); } catch {}
   [stream, share].forEach(s => s && s.getTracks().forEach(t => t.stop()));
   pc && pc.close(); pc = stream = share = vs = null;
   $("#cv").hidden = true; $("#inc").hidden = true;
 }
 function showCall(name, u, video, st) {
   const cv = $("#cv"); cv.hidden = false; cv.className = "";
+  try { NATIVE?.callStarted?.(); } catch {}
   cv.innerHTML = `<video id="rv" autoplay playsinline></video><video id="lv" autoplay playsinline muted hidden></video>
     <div class="who3">${av(name, u)}<h2>${esc(name)}</h2><small id="cst">${st}</small></div>
-    <div class="ctl"><button id="cm" title="Microfone">${ic("mic")}</button>${video ? `<button id="cc" title="Câmera">${ic("video")}</button>` : ""}${navigator.mediaDevices?.getDisplayMedia ? `<button id="cs" title="Compartilhar tela">${ic("screen")}</button>` : ""}<button id="ce" class="end" title="Desligar">${ic("phone")}</button></div>`;
+    <div class="ctl"><button id="cm" title="Microfone">${ic("mic")}</button>${video ? `<button id="cc" title="Câmera">${ic("video")}</button>` : ""}${navigator.mediaDevices?.getDisplayMedia || NATIVE?.startScreenShare ? `<button id="cs" title="Compartilhar tela">${ic("screen")}</button>` : ""}<button id="ce" class="end" title="Desligar">${ic("phone")}</button></div>`;
   if (video) { $("#lv").srcObject = stream; $("#lv").hidden = false; }
   $("#ce").onclick = () => hang();
   $("#cm").onclick = e => { const t = stream.getAudioTracks()[0]; t.enabled = !t.enabled; e.currentTarget.innerHTML = ic(t.enabled ? "mic" : "micoff"); };
@@ -443,17 +816,36 @@ function showCall(name, u, video, st) {
 }
 async function toggleShare() {
   if (share) return stopShare();
+  if (!navigator.mediaDevices?.getDisplayMedia && NATIVE?.startScreenShare) {
+    // celular (app): o Android captura a tela e manda quadros; aqui viram um vídeo para a ligação
+    nsCanvas = document.createElement("canvas"); nsCanvas.width = 360; nsCanvas.height = 640; nsCtx = nsCanvas.getContext("2d");
+    nsCtx.fillStyle = "#000"; nsCtx.fillRect(0, 0, 360, 640);
+    share = nsCanvas.captureStream(8); nativeShare = true;
+    const tr = share.getVideoTracks()[0]; await vs.replaceTrack(tr);
+    $("#cs").classList.add("on"); NATIVE.startScreenShare();
+    return;
+  }
   try { share = await navigator.mediaDevices.getDisplayMedia({video: true}); } catch { return; }
   const tr = share.getVideoTracks()[0]; await vs.replaceTrack(tr); tr.onended = stopShare;
   $("#lv").srcObject = share; $("#lv").hidden = false; $("#cs").classList.add("on");
 }
 function stopShare() {
   if (!share) return;
+  if (nativeShare) { nativeShare = false; try { NATIVE.stopScreenShare(); } catch {} }
   share.getTracks().forEach(t => t.stop()); share = null;
   const cam = stream?.getVideoTracks()[0] || null; vs && vs.replaceTrack(cam);
   if (cam) $("#lv").srcObject = stream; else $("#lv").hidden = true;
   $("#cs")?.classList.remove("on");
 }
+window.onScreenFrame = b64 => {
+  if (nsBusy || !nsCanvas) return; nsBusy = true;
+  const im = new Image();
+  im.onload = () => { if (nsCanvas.width !== im.width) { nsCanvas.width = im.width; nsCanvas.height = im.height; } nsCtx.drawImage(im, 0, 0); nsBusy = false; };
+  im.onerror = () => { nsBusy = false; };
+  im.src = "data:image/jpeg;base64," + b64;
+};
+window.onScreenStopped = () => { nativeShare = false; stopShare(); };      // o usuário parou pela notificação do Android
+window.onScreenError = m => { nativeShare = false; stopShare(); toast("Não foi possível compartilhar a tela" + (m ? ": " + m : ".")); };
 function wire() {
   pc = new RTCPeerConnection(ICE);
   const rs = new MediaStream();

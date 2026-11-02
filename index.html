@@ -56,11 +56,21 @@
       <button id="bMem" class="act" data-i="plus" title="Adicionar ao grupo" hidden></button>
     </header>
     <div id="msgs"><p class="empty">Escolha uma conversa para começar.</p></div>
-    <form id="fSend"><input id="txt" autocomplete="off" placeholder="Digite uma mensagem"><button class="send" data-i="send" title="Enviar"></button></form>
+    <div id="mentionBox" hidden></div>
+    <div id="emojiBox" hidden></div>
+    <div id="recBar" hidden><span class="dot"></span><b id="recT">0:00</b><span class="grow">Gravando áudio…</span><button type="button" id="recX" class="ib" data-i="x" title="Cancelar"></button><button type="button" id="recOk" class="send" data-i="send" title="Enviar áudio"></button></div>
+    <form id="fSend">
+      <button type="button" id="bEmoji" class="ib" data-i="smile" title="Emojis"></button>
+      <button type="button" id="bClip" class="ib" data-i="clip" title="Anexar"></button>
+      <input id="txt" autocomplete="off" placeholder="Digite uma mensagem">
+      <button class="send" id="bSend" data-i="send" title="Enviar" hidden></button>
+      <button type="button" class="send" id="bMic" data-i="mic" title="Gravar áudio"></button>
+    </form>
   </main>
 </section>
 
 <div id="sv" hidden></div>
+<div id="vw" hidden></div>
 <div id="cv" hidden></div>
 <div id="inc" hidden></div>
 <div id="modal" hidden><div class="box glass" id="box"></div></div>
